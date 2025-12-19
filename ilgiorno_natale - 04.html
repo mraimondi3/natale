@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Il Lettore de "IL GIORNO" - Corsa di Natale</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            background-color: #2c3e50;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-family: 'Press Start 2P', cursive;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #gameContainer {
+            position: relative;
+            border: 4px solid #ecf0f1;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        canvas {
+            background-color: #87CEEB;
+            display: block;
+            image-rendering: pixelated;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 14px;
+            text-shadow: 2px 2px #000;
+            z-index: 5;
+        }
+        
+        #city-label {
+             position: absolute;
+             top: 10px;
+             right: 10px;
+             font-size: 12px;
+             color: yellow;
+             text-shadow: 2px 2px #000;
+             z-index: 5;
+        }
+
+        #message-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            display: none;
+            text-shadow: 3px 3px #000;
+            z-index: 10;
+        }
+
+        #message-overlay h1 {
+            font-size: 30px;
+            color: #e74c3c;
+        }
+        #message-overlay h2 {
+            font-size: 18px;
+            margin-top: 20px;
+            color: #f1c40f;
+            cursor: pointer;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .il-giorno-title {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            font-size: 10px;
+            color: #333;
+            background: rgba(255,255,255,0.7);
+            padding: 2px 5px;
+            z-index: 5;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Corsa di Natale</h1>
+
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="600" height="300"></canvas>
+        <div id="ui-layer">Distanza: <span id="scoreText">0</span>m</div>
+        <div id="city-label">Milano</div>
+        <div class="il-giorno-title">Quotidiano: IL GIORNO</div>
+        
+        <div id="message-overlay">
+            <h1 id="main-message">GAME OVER</h1>
+            <h2 id="sub-message" onclick="resetGame()">Riprova</h2>
+        </div>
+    </div>
+    <p>Premi SPAZIO per saltare</p>
+
+
+<script>
+    // --- SETUP DEL GIOCO ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreText = document.getElementById('scoreText');
+    const cityLabel = document.getElementById('city-label');
+    const messageOverlay = document.getElementById('message-overlay');
+    const mainMessage = document.getElementById('main-message');
+    const subMessage = document.getElementById('sub-message');
+
+    let frames = 0;
+    let score = 0;
+    let gameSpeed = 4;
+    let bgOffsetX = 0;
+    let isGameOver = false;
+    let hasWon = false;
+    const groundHeight = 40;
+    const goalDistance = 1500;
+    let goalSpawned = false;
+    let nextObstacleFrame = 0; 
+
+    // --- SISTEMA NEVE ---
+    const snowFlakes = [];
+    const maxFlakes = 80; // Numero di fiocchi sullo schermo
+
+    class SnowFlake {
+        constructor() {
+            this.reset(true);
+        }
+
+        reset(randomY = false) {
+            this.x = Math.random() * canvas.width;
+            this.y = randomY ? Math.random() * canvas.height : -10;
+            this.size = Math.random() * 3 + 1; // Dimensione tra 1 e 4
+            this.speedY = Math.random() * 1 + 1; // Velocità caduta
+            this.drift = Math.random() * 1 - 0.5; // Oscillazione laterale
+        }
+
+        update() {
+            this.y += this.speedY;
+            this.x += this.drift;
+
+            // Effetto vento causato dalla corsa (i fiocchi vanno un po' a sinistra)
+            if (!isGameOver && !hasWon && !goalSpawned) {
+                this.x -= gameSpeed * 0.2; 
+            }
+
+            // Se esce dal fondo o dai lati, riciclalo
+            if (this.y > canvas.height || this.x < -10 || this.x > canvas.width + 10) {
+                this.reset();
+            }
+        }
+
+        draw() {
+            ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // Inizializza la neve
+    for(let i=0; i<maxFlakes; i++) {
+        snowFlakes.push(new SnowFlake());
+    }
+
+    function handleSnow() {
+        for (let flake of snowFlakes) {
+            flake.update();
+            flake.draw();
+        }
+    }
+
+
+    // --- OGGETTO GIOCATORE ---
+    const player = {
+        x: 50,
+        y: 0,
+        width: 30,
+        height: 50,
+        velocityY: 0,
+        jumpPower: -13,
+        gravity: 0.6,
+        grounded: false,
+
+        jump: function() {
+            if (this.grounded) {
+                this.velocityY = this.jumpPower;
+                this.grounded = false;
+            }
+        },
+
+        update: function() {
+            this.velocityY += this.gravity;
+            this.y += this.velocityY;
+
+            if (this.y + this.height > canvas.height - groundHeight) {
+                this.y = canvas.height - groundHeight - this.height;
+                this.velocityY = 0;
+                this.grounded = true;
+            }
+        },
+
+        draw: function() {
+            let drawX = this.x;
+            let drawY = this.y;
+
+            // Gambe
+            ctx.fillStyle = '#00008B';
+            ctx.fillRect(drawX + 5, drawY + 35, 10, 15);
+            ctx.fillRect(drawX + 20, drawY + 35, 10, 15);
+
+            // Corpo
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(drawX + 5, drawY + 15, 25, 20);
+
+            // Testa
+            ctx.fillStyle = '#FFC0CB';
+            ctx.fillRect(drawX + 10, drawY, 15, 15);
+
+            // Il Giornale
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(drawX + 15, drawY + 5, 25, 25);
+            ctx.fillStyle = '#AAAAAA';
+            ctx.fillRect(drawX + 18, drawY + 10, 18, 3);
+            ctx.fillRect(drawX + 18, drawY + 16, 18, 3);
+             ctx.fillStyle = '#000';
+             ctx.fillRect(drawX + 18, drawY + 22, 20, 4); 
+        }
+    };
+
+    // --- GESTIONE OSTACOLI ---
+    const obstacles = [];
+
+    class Obstacle {
+        constructor() {
+            this.width = 25;
+            this.height = 30;
+            this.x = canvas.width;
+            this.y = canvas.height - groundHeight - this.height;
+            this.markedForDeletion = false;
+        }
+
+        update() {
+            this.x -= gameSpeed;
+            if (this.x + this.width < 0) {
+                this.markedForDeletion = true;
+            }
+        }
+
+        draw() {
+            ctx.fillStyle = '#e74c3c';
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y + this.height);
+            ctx.lineTo(this.x + this.width / 2, this.y);
+            ctx.lineTo(this.x + this.width, this.y + this.height);
+            ctx.fill();
+        }
+    }
+
+    function handleObstacles() {
+        if (goalSpawned) return;
+
+        if (frames >= nextObstacleFrame) {
+            obstacles.push(new Obstacle());
+            let randomGap = Math.floor(Math.random() * 80) + 100;
+            nextObstacleFrame = frames + randomGap;
+        }
+
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            obstacles[i].update();
+            obstacles[i].draw();
+
+            if (
+                player.x < obstacles[i].x + obstacles[i].width &&
+                player.x + player.width > obstacles[i].x &&
+                player.y < obstacles[i].y + obstacles[i].height &&
+                player.y + player.height > obstacles[i].y
+            ) {
+                endGame(false);
+            }
+
+            if (obstacles[i].markedForDeletion) {
+                obstacles.splice(i, 1);
+            }
+        }
+    }
+
+    // --- OBIETTIVO FINALE ---
+    const goal = {
+        x: canvas.width,
+        treeWidth: 80,
+        treeHeight: 120,
+        giftSize: 30,
+        giftOpened: false,
+        
+        update: function() {
+             if (score >= goalDistance && !goalSpawned) {
+                 goalSpawned = true;
+                 this.x = canvas.width + 100;
+             }
+
+             if (goalSpawned) {
+                 this.x -= gameSpeed;
+                 let giftX = this.x + this.treeWidth / 2 - this.giftSize / 2;
+                 let giftY = canvas.height - groundHeight - this.giftSize;
+
+                 if (!this.giftOpened &&
+                     player.x < giftX + this.giftSize &&
+                     player.x + player.width > giftX &&
+                     player.y < giftY + this.giftSize &&
+                     player.y + player.height > giftY
+                 ) {
+                     this.giftOpened = true;
+                     endGame(true);
+                 }
+             }
+        },
+
+        draw: function() {
+            if (!goalSpawned) return;
+            let treeBaseY = canvas.height - groundHeight;
+            let treeCenterX = this.x + this.treeWidth / 2;
+
+            // Tronco
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(treeCenterX - 10, treeBaseY - 20, 20, 20);
+
+            // Foglie
+            ctx.fillStyle = '#228B22';
+            for(let i = 0; i < 3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(treeCenterX - (this.treeWidth/2 - i*10), treeBaseY - 20 - i*30);
+                ctx.lineTo(treeCenterX, treeBaseY - this.treeHeight - i*10);
+                ctx.lineTo(treeCenterX + (this.treeWidth/2 - i*10), treeBaseY - 20 - i*30);
+                ctx.fill();
+            }
+            
+            // Palline e Pacco
+            ctx.fillStyle = 'red'; ctx.fillRect(treeCenterX - 15, treeBaseY - 60, 5, 5);
+            ctx.fillStyle = 'yellow'; ctx.fillRect(treeCenterX + 10, treeBaseY - 90, 5, 5);
+            ctx.fillStyle = 'blue'; ctx.fillRect(treeCenterX - 5, treeBaseY - 110, 5, 5);
+
+            let giftX = treeCenterX - this.giftSize / 2;
+            let giftY = treeBaseY - this.giftSize;
+
+            if (this.giftOpened) {
+                 ctx.fillStyle = '#e74c3c'; ctx.fillRect(giftX, giftY + this.giftSize/2, this.giftSize, this.giftSize/2);
+                 ctx.fillStyle = '#e74c3c'; ctx.fillRect(giftX + this.giftSize + 5, giftY + this.giftSize - 10, this.giftSize, 10);
+                 ctx.fillStyle = '#f1c40f'; ctx.fillRect(giftX + this.giftSize + 5 + this.giftSize/2 - 2, giftY + this.giftSize - 10, 4, 10);
+            } else {
+                ctx.fillStyle = '#e74c3c'; ctx.fillRect(giftX, giftY, this.giftSize, this.giftSize);
+                ctx.fillStyle = '#f1c40f'; ctx.fillRect(giftX + this.giftSize / 2 - 3, giftY, 6, this.giftSize);
+                ctx.fillRect(giftX, giftY + this.giftSize / 2 - 3, this.giftSize, 6);
+            }
+        }
+    };
+
+
+    // --- DISEGNO DEGLI SFONDI CITTADINI ---
+
+    function drawMilanBuildings(startX, groundY) {
+        ctx.fillStyle = '#dcdcdc'; 
+        ctx.fillRect(startX + 50, groundY - 80, 140, 80);
+        for(let i=0; i<7; i++) {
+            let h = (i===3) ? 50 : 30;
+            ctx.fillRect(startX + 55 + i*20, groundY - 80 - h, 10, h);
+        }
+        ctx.fillStyle = '#333';
+        ctx.fillRect(startX + 110, groundY - 30, 20, 30);
+    }
+
+    function drawBolognaBuildings(startX, groundY) {
+        ctx.fillStyle = '#c0392b'; 
+        ctx.fillRect(startX + 80, groundY - 180, 30, 180);
+        ctx.fillStyle = '#a93226';
+        ctx.fillRect(startX + 75, groundY - 190, 40, 10);
+        ctx.fillStyle = '#c0392b'; 
+        ctx.fillRect(startX + 130, groundY - 100, 30, 100);
+        ctx.fillRect(startX + 125, groundY - 120, 30, 20); 
+    }
+
+    function drawFlorenceBuildings(startX, groundY) {
+        ctx.fillStyle = '#ecf0f1'; 
+        ctx.fillRect(startX + 30, groundY - 70, 100, 70);
+        ctx.fillStyle = '#27ae60'; 
+        ctx.fillRect(startX + 40, groundY - 60, 80, 10);
+        ctx.fillStyle = '#d35400';
+        ctx.beginPath();
+        ctx.moveTo(startX + 30, groundY - 70);
+        ctx.quadraticCurveTo(startX + 80, groundY - 150, startX + 130, groundY - 70);
+        ctx.fill();
+        ctx.fillStyle = '#ecf0f1';
+        ctx.fillRect(startX + 75, groundY - 155, 10, 15);
+        ctx.fillStyle = '#bdc3c7';
+        ctx.fillRect(startX + 140, groundY - 160, 25, 160);
+    }
+
+    function drawBackground() {
+        ctx.fillStyle = '#87CEEB'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#27ae60'; ctx.fillRect(0, canvas.height - groundHeight, canvas.width, groundHeight);
+        
+        let groundY = canvas.height - groundHeight;
+        let scrollX = (bgOffsetX * 0.5) % canvas.width;
+
+        let currentCity = 0; 
+        if (score > 500) currentCity = 1;
+        if (score > 1000) currentCity = 2;
+
+        if(currentCity === 0) cityLabel.innerText = "Milano";
+        else if(currentCity === 1) cityLabel.innerText = "Bologna";
+        else cityLabel.innerText = "Firenze";
+
+        ctx.save();
+        ctx.translate(-scrollX, 0);
+        if(currentCity === 0) drawMilanBuildings(50, groundY);
+        if(currentCity === 1) drawBolognaBuildings(50, groundY);
+        if(currentCity === 2) drawFlorenceBuildings(50, groundY);
+        ctx.restore();
+
+        ctx.save();
+        ctx.translate(canvas.width - scrollX, 0);
+        if(currentCity === 0) drawMilanBuildings(50, groundY);
+        if(currentCity === 1) drawBolognaBuildings(50, groundY);
+        if(currentCity === 2) drawFlorenceBuildings(50, groundY);
+        ctx.restore();
+    }
+
+    // --- MAIN ---
+    function animate() {
+        if (isGameOver || hasWon) {
+            // Se il gioco è finito, disegna comunque la neve sopra la scena statica
+            // ma non puliamo il canvas, altrimenti sparisce tutto il resto
+            // (Per semplicità nel game over fermiamo tutto tranne l'input)
+             return; 
+        }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        frames++;
+        score += Math.round(gameSpeed / 4);
+        scoreText.innerText = score;
+        
+        if(!goalSpawned) {
+             bgOffsetX += gameSpeed;
+        }
+
+        drawBackground();
+        
+        // La neve viene disegnata SOPRA lo sfondo ma SOTTO giocatore/ostacoli per profondità
+        // Oppure sopra tutto. Qui la mettiamo sopra tutto per atmosfera.
+        handleSnow();
+
+        goal.update();
+        goal.draw();
+
+        player.update();
+        player.draw();
+
+        handleObstacles();
+        
+        if (frames % 500 === 0 && !goalSpawned) {
+            gameSpeed += 0.5;
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    function endGame(win) {
+        isGameOver = true;
+        messageOverlay.style.display = 'block';
+
+        if (win) {
+            hasWon = true;
+            mainMessage.innerText = "BUON NATALE!";
+            mainMessage.style.color = "#2ecc71";
+            subMessage.innerText = "Hai consegnato Il Giorno a Firenze! Clicca per rigiocare.";
+            cityLabel.innerText = "Arrivo: Firenze";
+            drawVictoryFX();
+        } else {
+            mainMessage.innerText = "GAME OVER";
+            mainMessage.style.color = "#e74c3c";
+            subMessage.innerText = "Clicca per riprovare";
+        }
+    }
+    
+    function drawVictoryFX() {
+        if(!hasWon) return;
+        ctx.fillStyle = 'gold';
+        for(let i=0; i<30; i++) {
+             ctx.fillRect(goal.x + Math.random()*120 - 20, goal.y - Math.random()*180, 6, 6);
+        }
+    }
+
+    function resetGame() {
+        player.y = 0;
+        player.velocityY = 0;
+        obstacles.length = 0;
+        score = 0;
+        frames = 0;
+        bgOffsetX = 0;
+        gameSpeed = 4;
+        isGameOver = false;
+        hasWon = false;
+        goalSpawned = false;
+        goal.giftOpened = false;
+        goal.x = canvas.width;
+        nextObstacleFrame = 100;
+        cityLabel.innerText = "Milano";
+        messageOverlay.style.display = 'none';
+        
+        // Reset neve casuale
+        for(let flake of snowFlakes) flake.reset(true);
+        
+        animate();
+    }
+
+    window.addEventListener('keydown', function(e) {
+        if (e.code === 'Space') {
+            if (isGameOver || hasWon) {
+                resetGame();
+            } else {
+                player.jump();
+            }
+        }
+    });
+    
+    canvas.addEventListener('touchstart', function() {
+          if (isGameOver || hasWon) {
+                resetGame();
+            } else {
+                player.jump();
+            }
+    });
+
+    nextObstacleFrame = 100;
+    animate();
+
+</script>
+</body>
+</html>
